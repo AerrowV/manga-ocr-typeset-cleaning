@@ -1,0 +1,23 @@
+{
+  "render": {
+    "alignment": "center",
+    "renderer": "manga2eng",
+    "direction": "auto",
+    "font_size_offset": 2,
+    "line_spacing": 0
+  },
+  "translator": {
+    "translator": "openai",
+    "target_lang": "ENG"
+  },
+  "ocr": {
+    "ocr": "48px",
+    "ignore_bubble": 5
+  },
+  "inpainter": {
+    "inpainter": "lama_large",
+    "inpainting_size": 4096
+  },
+  "kernel_size": 7,
+  "mask_dilation_offset": 30
+}
