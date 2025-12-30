@@ -6,7 +6,6 @@ from typing import List
 from app.core.config import EngineConfig
 
 def build_mit_command(cfg: EngineConfig, input_folder: Path, output_folder: Path) -> List[str]:
-    # force absolute paths so cwd/workdir never affects where output goes
     input_folder = Path(input_folder).expanduser().resolve()
     output_folder = Path(output_folder).expanduser().resolve()
 
@@ -20,17 +19,21 @@ def build_mit_command(cfg: EngineConfig, input_folder: Path, output_folder: Path
 
     cmd += ["--kernel-size", "7"]
 
+    # Font (prefer Comic Shanns, fallback Anime Ace)
     font = (cfg.font_path or "").strip()
-    if not font:
-        engine_dir = Path(getattr(cfg, "engine_dir", "")).expanduser()
-        candidate = engine_dir / "fonts" / "anime_ace_3.ttf"
-        if candidate.exists():
-            font = str(candidate)
+    engine_dir = Path(getattr(cfg, "engine_dir", "") or "").expanduser().resolve()
+
+    if not font and engine_dir.exists():
+        preferred = engine_dir / "fonts" / "comic shanns 2.ttf"
+        fallback = engine_dir / "fonts" / "anime_ace_3.ttf"
+        if preferred.exists():
+            font = str(preferred)
+        elif fallback.exists():
+            font = str(fallback)
 
     if font:
-        cmd += ["--font-path", font]
+        cmd += ["--font-path", str(Path(font).expanduser().resolve())]
 
-    # Subcommand (ABSOLUTE -i and -o)
     cmd += ["local", "-i", str(input_folder), "-o", str(output_folder), "--overwrite"]
 
     cfg_file = (getattr(cfg, "config_file", "") or "").strip()
@@ -42,14 +45,19 @@ def build_mit_command(cfg: EngineConfig, input_folder: Path, output_folder: Path
 
 
 def run_mit_blocking(cfg: EngineConfig, input_folder: Path, output_folder: Path) -> int:
+    output_folder = Path(output_folder).expanduser().resolve()
     output_folder.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
 
+    engine_dir = Path(getattr(cfg, "engine_dir", "") or "").expanduser().resolve()
     cmd = build_mit_command(cfg, input_folder, output_folder)
 
     proc = subprocess.Popen(
         cmd,
+        cwd=str(engine_dir) if engine_dir.exists() else None,  # IMPORTANT
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -60,7 +68,6 @@ def run_mit_blocking(cfg: EngineConfig, input_folder: Path, output_folder: Path)
 
     assert proc.stdout is not None
     for line in proc.stdout:
-        # This is consumed by the UI thread worker; here it's just for completeness if used headless.
         print(line.rstrip())
 
     return proc.wait()

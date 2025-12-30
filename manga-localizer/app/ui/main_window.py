@@ -4,7 +4,7 @@ import os, subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
-
+from PySide6.QtWidgets import QInputDialog, QLineEdit
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QPixmap, QAction
 from PySide6.QtWidgets import (
@@ -284,15 +284,20 @@ class MitWorker(QThread):
     log_line = Signal(str)
     finished_code = Signal(int)
 
-    def __init__(self, cmd: List[str], workdir: Optional[Path] = None):
+    def __init__(self, cmd: List[str], workdir: Optional[Path] = None, api_key: str = ""):
         super().__init__()
         self.cmd = cmd
         self.workdir = workdir
+        self.api_key = api_key.strip()
 
     def run(self) -> None:
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"   
+        env["PYTHONIOENCODING"] = "utf-8"
+
+        if self.api_key:
+            env["OPENAI_API_KEY"] = self.api_key
+
         proc = subprocess.Popen(
             self.cmd,
             cwd=str(self.workdir) if self.workdir else None,
@@ -307,7 +312,6 @@ class MitWorker(QThread):
         for line in proc.stdout:
             self.log_line.emit(line.rstrip())
         self.finished_code.emit(proc.wait())
-
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -767,14 +771,25 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Output", f"Output folder:\n{out_dir}")
 
     def translate_folder(self) -> None:
+        # 1) Prevent double-run
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self, "Busy", "Translation is already running.")
             return
-        
+
+        # 2) Need an input folder
         if not self.current_dir:
             QMessageBox.warning(self, "No folder", "Open a manga folder first.")
             return
 
+        # 3) Ask for key only if OpenAI is used
+        api_key = ""
+        if getattr(self.cfg.engine, "translator", "") == "openai":
+            api_key = self._ensure_openai_key()
+            if api_key is None:
+                QMessageBox.information(self, "Missing key", "Translation cancelled (no API key provided).")
+                return
+
+        # 4) Save current UI settings
         self._save_cfg()
 
         engine_dir = Path(self.cfg.engine.engine_dir).expanduser()
@@ -786,12 +801,14 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # 5) Output folder
         out_dir = (self._output_root_abs() / self.current_dir.name).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         self.cfg.output_root = str(self._output_root_abs())
         save_settings(self.cfg)
 
+        # 6) Build command
         cmd = build_mit_command(self.cfg.engine, self.current_dir, out_dir)
 
         self.log.append("Running:\n" + " ".join(cmd) + "\n")
@@ -800,8 +817,9 @@ class MainWindow(QMainWindow):
         self.act_out.setEnabled(False)
         self.act_run.setEnabled(False)
 
+        # 7) Start worker (PASS KEY HERE)
         try:
-            self.worker = MitWorker(cmd, workdir=engine_dir)
+            self.worker = MitWorker(cmd, workdir=engine_dir, api_key=api_key)
             self.worker.log_line.connect(self.log.append)
             self.worker.finished_code.connect(self._on_worker_done)
             self.worker.start()
@@ -810,6 +828,7 @@ class MainWindow(QMainWindow):
             self.act_open.setEnabled(True)
             self.act_out.setEnabled(True)
             self.act_run.setEnabled(True)
+
 
     def _on_worker_done(self, code: int) -> None:
         self.log.append(f"\nDone. Exit code: {code}")
@@ -860,3 +879,28 @@ class MainWindow(QMainWindow):
 
         return root
 
+    def _ensure_openai_key(self) -> str | None:
+        # 1) env already set?
+        if os.environ.get("OPENAI_API_KEY"):
+            return os.environ["OPENAI_API_KEY"]
+
+        # 2) stored in your settings?
+        key = getattr(self.cfg.engine, "openai_api_key", "").strip()
+        if key:
+            return key
+
+        # 3) prompt
+        key, ok = QInputDialog.getText(
+            self,
+            "OpenAI API Key",
+            "Paste your OpenAI API key (stored locally on this PC):",
+            QLineEdit.Password,
+        )
+        if not ok or not key.strip():
+            return None
+
+        key = key.strip()
+        # store in settings (simple + portable). If you want safer storage later, switch to keyring.
+        self.cfg.engine.openai_api_key = key
+        save_settings(self.cfg)
+        return key
